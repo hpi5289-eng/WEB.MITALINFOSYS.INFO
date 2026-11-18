@@ -251,6 +251,97 @@ function Flush-Logs($apikey, $fileMonitor) {
   Http-Json 'POST' "$ServerUrl/api/log.php" @{ 'X-API-Key'=$apikey } @{ logs=$items } | Out-Null
 }
 
+# ===== Setup wizard — double-click par "Next" screen, 3 options =====
+# 1) Config file (.json) upload  2) Token (Enroll Code) paste  3) Email/Username
+#    + Password se login (portal khud token nikal leta hai). Lautata hai hashtable
+#    @{server; enroll_secret} ya $null (cancel). PS 2.0 (Win7) tak chalta hai.
+function Show-SetupWizard {
+  try { Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing } catch { return $null }
+  $f = New-Object System.Windows.Forms.Form
+  $f.Text = 'DLP_Kriva Setup'; $f.StartPosition = 'CenterScreen'
+  $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false
+  $f.ClientSize = New-Object System.Drawing.Size(440, 300)
+  $f.BackColor = [System.Drawing.Color]::White
+  $hd = New-Object System.Windows.Forms.Label
+  $hd.Text = 'Is PC ko kis tarah client se jodein?'; $hd.AutoSize = $false
+  $hd.Location = New-Object System.Drawing.Point(18,14); $hd.Size = New-Object System.Drawing.Size(404,22)
+  $hd.Font = New-Object System.Drawing.Font('Segoe UI',10,[System.Drawing.FontStyle]::Bold)
+  $f.Controls.Add($hd)
+  # Option 1 — config file
+  $r1 = New-Object System.Windows.Forms.RadioButton
+  $r1.Text = '1) Config file (.json) upload karein'; $r1.Location = New-Object System.Drawing.Point(18,46)
+  $r1.Size = New-Object System.Drawing.Size(404,22); $r1.Checked = $true; $f.Controls.Add($r1)
+  # Option 2 — token paste
+  $r2 = New-Object System.Windows.Forms.RadioButton
+  $r2.Text = '2) Token (Enroll Code) paste karein'; $r2.Location = New-Object System.Drawing.Point(18,78)
+  $r2.Size = New-Object System.Drawing.Size(404,22); $f.Controls.Add($r2)
+  $tbTok = New-Object System.Windows.Forms.TextBox
+  $tbTok.Location = New-Object System.Drawing.Point(40,102); $tbTok.Size = New-Object System.Drawing.Size(382,24)
+  $tbTok.Enabled = $false; $f.Controls.Add($tbTok)
+  # Option 3 — login
+  $r3 = New-Object System.Windows.Forms.RadioButton
+  $r3.Text = '3) Email/Username + Password se login'; $r3.Location = New-Object System.Drawing.Point(18,134)
+  $r3.Size = New-Object System.Drawing.Size(404,22); $f.Controls.Add($r3)
+  $lbU = New-Object System.Windows.Forms.Label
+  $lbU.Text = 'Email / Username'; $lbU.Location = New-Object System.Drawing.Point(40,160); $lbU.Size = New-Object System.Drawing.Size(130,20)
+  $f.Controls.Add($lbU)
+  $tbU = New-Object System.Windows.Forms.TextBox
+  $tbU.Location = New-Object System.Drawing.Point(176,158); $tbU.Size = New-Object System.Drawing.Size(246,24); $tbU.Enabled = $false; $f.Controls.Add($tbU)
+  $lbP = New-Object System.Windows.Forms.Label
+  $lbP.Text = 'Password'; $lbP.Location = New-Object System.Drawing.Point(40,188); $lbP.Size = New-Object System.Drawing.Size(130,20)
+  $f.Controls.Add($lbP)
+  $tbP = New-Object System.Windows.Forms.TextBox
+  $tbP.Location = New-Object System.Drawing.Point(176,186); $tbP.Size = New-Object System.Drawing.Size(246,24); $tbP.UseSystemPasswordChar = $true; $tbP.Enabled = $false; $f.Controls.Add($tbP)
+  # enable/disable fields with selection
+  $sync = {
+    $tbTok.Enabled = $r2.Checked
+    $tbU.Enabled = $r3.Checked; $tbP.Enabled = $r3.Checked
+  }
+  $r1.Add_CheckedChanged($sync); $r2.Add_CheckedChanged($sync); $r3.Add_CheckedChanged($sync)
+  # buttons
+  $bn = New-Object System.Windows.Forms.Button
+  $bn.Text = 'Next'; $bn.Location = New-Object System.Drawing.Point(258,250); $bn.Size = New-Object System.Drawing.Size(80,30)
+  $f.Controls.Add($bn)
+  $bc = New-Object System.Windows.Forms.Button
+  $bc.Text = 'Cancel'; $bc.Location = New-Object System.Drawing.Point(342,250); $bc.Size = New-Object System.Drawing.Size(80,30)
+  $bc.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+  $f.Controls.Add($bc); $f.CancelButton = $bc
+  $script:WizResult = $null
+  $bn.Add_Click({
+    if ($r1.Checked) {
+      $ofd = New-Object System.Windows.Forms.OpenFileDialog
+      $ofd.Title = 'agent-config.json chunein'; $ofd.Filter = 'DLP config (*.json)|*.json|All files (*.*)|*.*'
+      if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and (Test-Path $ofd.FileName)) {
+        try { $cfg = From-Json (Get-Content $ofd.FileName -Raw) } catch { $cfg = $null }
+        if ($cfg -and $cfg.enroll_secret) {
+          $srv = if ($cfg.server) { [string]$cfg.server } else { $ServerUrl }
+          $script:WizResult = @{ server = $srv; enroll_secret = [string]$cfg.enroll_secret }
+          $f.DialogResult = [System.Windows.Forms.DialogResult]::OK; $f.Close()
+        } else { [System.Windows.Forms.MessageBox]::Show('Config file me enroll_secret nahi mila.','DLP_Kriva',0,48) | Out-Null }
+      }
+    } elseif ($r2.Checked) {
+      $code = ("" + $tbTok.Text).Trim()
+      if ($code) { $script:WizResult = @{ server = $ServerUrl; enroll_secret = $code }; $f.DialogResult = [System.Windows.Forms.DialogResult]::OK; $f.Close() }
+      else { [System.Windows.Forms.MessageBox]::Show('Token (Enroll Code) daalein.','DLP_Kriva',0,48) | Out-Null }
+    } elseif ($r3.Checked) {
+      $u = ("" + $tbU.Text).Trim(); $pw = [string]$tbP.Text
+      if (-not $u -or -not $pw) { [System.Windows.Forms.MessageBox]::Show('Login aur password dono daalein.','DLP_Kriva',0,48) | Out-Null; return }
+      $resp = $null
+      try { $resp = Http-Json 'POST' "$ServerUrl/api/enroll_login.php" @{} @{ login=$u; password=$pw } } catch {}
+      if ($resp -and $resp.ok -and $resp.enroll_secret) {
+        $srv = if ($resp.server) { [string]$resp.server } else { $ServerUrl }
+        $script:WizResult = @{ server = $srv; enroll_secret = [string]$resp.enroll_secret }
+        $f.DialogResult = [System.Windows.Forms.DialogResult]::OK; $f.Close()
+      } else {
+        $em = if ($resp -and $resp.error) { [string]$resp.error } else { 'login fail — net/credentials check karein' }
+        [System.Windows.Forms.MessageBox]::Show($em,'DLP_Kriva',0,48) | Out-Null
+      }
+    }
+  })
+  $null = $f.ShowDialog()
+  return $script:WizResult
+}
+
 # ===== EXE double-click => khud install (koi .bat/powershell dikhega nahi) =====
 # जब compiled DLP_Kriva.exe को कहीं से double-click करें: खुद को ProgramData में copy
 # करके SYSTEM task बना देती और चालू कर देती है। Task से चलते वक़्त (ProgramData से) नीचे
@@ -280,34 +371,16 @@ if ($isExe -and -not $inData) {
       (To-Json @{ server = $ServerUrl; enroll_secret = $EnrollSecret; build_token = $BuildToken }) | Set-Content -Path $dstCfg -Encoding ASCII
       Log-Dbg "SELF-INSTALL config: baked EnrollSecret"
     } else {
-      $code = ''
-      try {
-        Add-Type -AssemblyName Microsoft.VisualBasic
-        $msg = 'Is client ka Enroll Code (token) yahan paste karein.' + [Environment]::NewLine + [Environment]::NewLine + 'Ya khali chhod kar OK dabayein to config file (.json) chun sakte hain.'
-        $code = [Microsoft.VisualBasic.Interaction]::InputBox($msg, 'DLP_Kriva Setup', '')
-      } catch {}
-      $code = ("" + $code).Trim()
-      if ($code) {
-        (To-Json @{ server = $ServerUrl; enroll_secret = $code }) | Set-Content -Path $dstCfg -Encoding ASCII
-        Log-Dbg "SELF-INSTALL config: enroll code pasted"
+      # Next wizard — 3 options (file / token paste / login)
+      $wr = Show-SetupWizard
+      if ($wr -and $wr.enroll_secret) {
+        $srv = if ($wr.server) { [string]$wr.server } else { $ServerUrl }
+        (To-Json @{ server = $srv; enroll_secret = [string]$wr.enroll_secret }) | Set-Content -Path $dstCfg -Encoding ASCII
+        Log-Dbg "SELF-INSTALL config: via wizard"
       } else {
-        # File chooser — agent-config.json upload/choose
-        $picked = ''
-        try {
-          Add-Type -AssemblyName System.Windows.Forms
-          $ofd = New-Object System.Windows.Forms.OpenFileDialog
-          $ofd.Title = 'agent-config.json chunein'
-          $ofd.Filter = 'DLP config (*.json)|*.json|All files (*.*)|*.*'
-          if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $picked = $ofd.FileName }
-        } catch {}
-        if ($picked -and (Test-Path $picked)) {
-          Copy-Item $picked $dstCfg -Force
-          Log-Dbg "SELF-INSTALL config: file chosen"
-        } else {
-          try { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Enroll Code ya config file zaroori hai. Setup ruk gaya.','DLP_Kriva',0,48) | Out-Null } catch {}
-          Log-Dbg "SELF-INSTALL abort: no enroll code / config"
-          exit
-        }
+        try { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Setup cancel ho gaya. Token/config/login me se ek zaroori hai.','DLP_Kriva',0,48) | Out-Null } catch {}
+        Log-Dbg "SELF-INSTALL abort: wizard cancelled"
+        exit
       }
     }
     $tr = '"' + (Join-Path $DataDir 'DLP_Kriva.exe') + '"'

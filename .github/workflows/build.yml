@@ -23,7 +23,9 @@ jobs:
         shell: powershell
         run: |
           Import-Module ps2exe
-          Invoke-ps2exe .\dlp-agent.ps1 .\DLP_Kriva.exe -noConsole -title 'DLP_Kriva' -company 'Kriva Infosys' -product 'Kriva DLP'
+          $ico = if (Test-Path .\kriva-logo.ico) { '.\kriva-logo.ico' } else { $null }
+          if ($ico) { Invoke-ps2exe .\dlp-agent.ps1 .\DLP_Kriva.exe -noConsole -iconFile $ico -title 'DLP_Kriva' -company 'Kriva Infosys' -product 'Kriva DLP' }
+          else      { Invoke-ps2exe .\dlp-agent.ps1 .\DLP_Kriva.exe -noConsole -title 'DLP_Kriva' -company 'Kriva Infosys' -product 'Kriva DLP' }
           if (-not (Test-Path .\DLP_Kriva.exe)) { throw 'EXE not built' }
           Write-Host 'DLP_Kriva.exe ban gayi.'
 
