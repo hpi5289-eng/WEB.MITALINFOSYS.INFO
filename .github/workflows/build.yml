@@ -1,0 +1,35 @@
+name: Build DLP_Kriva EXE
+
+on:
+  push:
+    branches: [ kriva-agent-exe ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ps2exe
+        shell: powershell
+        run: |
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name ps2exe -Scope CurrentUser -Force
+
+      - name: Build DLP_Kriva.exe
+        shell: powershell
+        run: |
+          Import-Module ps2exe
+          Invoke-ps2exe .\dlp-agent.ps1 .\DLP_Kriva.exe -noConsole -title 'DLP_Kriva' -company 'Kriva Infosys' -product 'Kriva DLP'
+          if (-not (Test-Path .\DLP_Kriva.exe)) { throw 'EXE not built' }
+          Write-Host 'DLP_Kriva.exe ban gayi.'
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: DLP_Kriva-exe
+          path: DLP_Kriva.exe
+          if-no-files-found: error
