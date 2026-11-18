@@ -5,6 +5,9 @@ on:
     branches: [ kriva-agent-exe ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -29,9 +32,24 @@ jobs:
           if (-not (Test-Path .\DLP_Kriva.exe)) { throw 'EXE not built' }
           Write-Host 'DLP_Kriva.exe ban gayi.'
 
-      - name: Upload EXE
+      - name: Upload EXE (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: DLP_Kriva-exe
           path: DLP_Kriva.exe
           if-no-files-found: error
+
+      - name: Publish EXE to exe-out branch (for direct pull)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p out
+          cp DLP_Kriva.exe out/DLP_Kriva.exe
+          git config user.name "kriva-ci"
+          git config user.email "ci@kriva.local"
+          git checkout --orphan exe-out
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f out/DLP_Kriva.exe
+          git commit -m "DLP_Kriva.exe build $(date -u +%Y%m%d-%H%M%S)"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" exe-out
