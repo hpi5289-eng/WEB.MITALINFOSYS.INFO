@@ -120,10 +120,10 @@ function Get-DeviceInfo {
 }
 
 function Register-Agent {
-  if (Test-Path $StateFile) {
-    $s = From-Json (Get-Content $StateFile -Raw)
-    if ($s -and $s.api_key) { return [string]$s.api_key }
-  }
+  # HAMESHA register.php call karo (machine_id se idempotent hai — purana PC
+  # wahi key/row refresh karta hai, last_seen update hota hai). Pehle cached key
+  # par short-circuit karte the — isi se kai PC install hokar bhi panel me nahi
+  # aate the (stale/galat cached key, register kabhi hit hi nahi hota tha).
   $d = Get-DeviceInfo
   $body = @{ enroll_secret=$EnrollSecret; pc_name=$env:COMPUTERNAME; machine_id=(Get-MachineId);
              build_token=$BuildToken; mac=$d.mac; win_ver=$d.win_ver; local_ip=$d.local_ip;
@@ -136,6 +136,16 @@ function Register-Agent {
     return [string]$r.api_key
   }
   Log-Dbg ("REGISTER FAIL  resp.ok=" + $(if($r){$r.ok}else{'null'}) + "  err=" + $(if($r){$r.error}else{'no response (network/URL?)'}))
+  # Server tak nahi pahuncha (offline) → cached key se polling chalu rakho
+  if (-not $r) {
+    if (Test-Path $StateFile) {
+      $s = From-Json (Get-Content $StateFile -Raw)
+      if ($s -and $s.api_key) { Log-Dbg "REGISTER: offline, cached key use"; return [string]$s.api_key }
+    }
+  } else {
+    # server ne mana kiya (galat secret/expired) → purani key hata do
+    try { Remove-Item $StateFile -Force -ErrorAction SilentlyContinue } catch {}
+  }
   return $null
 }
 
@@ -400,24 +410,34 @@ $apikey = $null; $fileMonitor = 1; $lastShot = Get-Date '2000-01-01'
 while ($true) {
   if (-not $apikey) { $apikey = Register-Agent }
   if ($apikey) {
+    $authOk = $false
     try {
       $p = Http-Json 'GET' "$ServerUrl/api/policy.php?pc=$env:COMPUTERNAME" @{ 'X-API-Key'=$apikey } $null
-      if ($p -and $p.ok -and $p.active) {
-        $pol = $p.policy
-        Apply-UsbPolicy ([int]$pol.usb_block)
-        Apply-WinUpdate ([int]$pol.block_win_update)
-        $fileMonitor = [int]$pol.file_monitor
-        # screenshots
-        if ([int]$pol.screenshot -eq 1) {
-          $iv = [int]$pol.screenshot_sec; if ($iv -lt 10) { $iv = 60 }
-          if ((New-TimeSpan $lastShot (Get-Date)).TotalSeconds -ge $iv) { Capture-Screen $apikey ([int]$pol.screen_watermark); $lastShot = Get-Date }
+      if ($p -and $p.ok) {
+        $authOk = $true
+        if ($p.active) {
+          $pol = $p.policy
+          Apply-UsbPolicy ([int]$pol.usb_block)
+          Apply-WinUpdate ([int]$pol.block_win_update)
+          $fileMonitor = [int]$pol.file_monitor
+          # screenshots
+          if ([int]$pol.screenshot -eq 1) {
+            $iv = [int]$pol.screenshot_sec; if ($iv -lt 10) { $iv = 60 }
+            if ((New-TimeSpan $lastShot (Get-Date)).TotalSeconds -ge $iv) { Capture-Screen $apikey ([int]$pol.screen_watermark); $lastShot = Get-Date }
+          }
+          # remote commands
+          if ($p.commands) { foreach ($c in $p.commands) { Run-Command $c } }
         }
-        # remote commands
-        if ($p.commands) { foreach ($c in $p.commands) { Run-Command $c } }
       }
     } catch {}
-    Check-UsbInsert
-    Flush-Logs $apikey $fileMonitor
+    if ($authOk) {
+      Check-UsbInsert
+      Flush-Logs $apikey $fileMonitor
+    } else {
+      # key reject hui ya server se jawab nahi → agli baar dobara register karo
+      Log-Dbg "POLL auth/connection fail — will re-register"
+      $apikey = $null
+    }
   }
   Start-Sleep -Seconds $PollSeconds
 }
